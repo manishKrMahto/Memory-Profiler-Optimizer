@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Memory Profiler Optimizer</title>
+    <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #0f1733;
+        --panel2: #101a3a;
+        --text: #e8ecff;
+        --muted: #a9b2d6;
+        --border: rgba(255, 255, 255, 0.09);
+        --accent: #7aa2ff;
+        --ok: #44d19a;
+        --danger: #ff6b6b;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        color: var(--text);
+        background: radial-gradient(1200px 800px at 15% 0%, #17265a 0%, var(--bg) 55%);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(11, 16, 32, 0.7);
+        backdrop-filter: blur(8px);
+        position: sticky;
+        top: 0;
+        z-index: 5;
+      }
+      header h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: 0.2px; }
+      header .sub { color: var(--muted); font-size: 12px; }
+      main {
+        display: grid;
+        grid-template-columns: 360px 1fr;
+        gap: 12px;
+        padding: 14px;
+        height: calc(100vh - 62px);
+      }
+      .card {
+        border: 1px solid var(--border);
+        background: linear-gradient(180deg, rgba(15, 23, 51, 0.92), rgba(15, 23, 51, 0.75));
+        border-radius: 14px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .card .card-h {
+        padding: 12px 12px 10px 12px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(16, 26, 58, 0.65);
+      }
+      .section-title { font-size: 12px; font-weight: 700; letter-spacing: 0.4px; color: var(--muted); text-transform: uppercase; }
+      .body { padding: 12px; overflow: auto; }
+      .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      input[type="text"], input[type="file"] {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 10px;
+        background: rgba(10, 14, 27, 0.55);
+        color: var(--text);
+      }
+      button {
+        background: rgba(122, 162, 255, 0.15);
+        color: var(--text);
+        border: 1px solid rgba(122, 162, 255, 0.35);
+        padding: 8px 10px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      button:hover { background: rgba(122, 162, 255, 0.22); }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .list { display: flex; flex-direction: column; gap: 6px; }
+      .item {
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgba(16, 26, 58, 0.35);
+        cursor: pointer;
+      }
+      .item:hover { border-color: rgba(122, 162, 255, 0.4); }
+      .item.active { border-color: rgba(122, 162, 255, 0.75); background: rgba(122, 162, 255, 0.12); }
+      .muted { color: var(--muted); }
+      .mono { font-family: var(--mono); }
+      .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .code { font-family: var(--mono); font-size: 12px; white-space: pre; overflow: auto; padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: rgba(10, 14, 27, 0.55); }
+      .kpi { display: flex; gap: 10px; flex-wrap: wrap; }
+      .pill { border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; background: rgba(16, 26, 58, 0.35); }
+      .pill b { font-weight: 700; }
+      .ok { color: var(--ok); }
+      .danger { color: var(--danger); }
+      .chart-wrap { border: 1px solid var(--border); background: rgba(10, 14, 27, 0.35); border-radius: 14px; padding: 10px; }
+      .chart-wrap img { width: 100%; height: auto; display: block; }
+      @media (max-width: 980px) {
+        main { grid-template-columns: 1fr; height: auto; }
+        .split { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Memory Profiler Optimizer</h1>
+        <div class="sub">Ingest → select → profile/optimize → compare → decide</div>
+      </div>
+      <div class="sub" id="status">Ready</div>
+    </header>
+
+    <main>
+      <section class="card">
+        <div class="card-h">
+          <div class="section-title">Ingest</div>
+        </div>
+        <div class="body">
+          <div class="row" style="margin-bottom: 10px">
+            <input id="githubUrl" type="text" placeholder="GitHub URL (https://github.com/owner/repo)" />
+            <button id="btnIngestGithub">Ingest GitHub</button>
+          </div>
+          <div class="row" style="margin-bottom: 14px">
+            <input id="fileUpload" type="file" accept=".py" />
+            <button id="btnIngestFile">Ingest .py File</button>
+          </div>
+
+          <div class="section-title" style="margin: 14px 0 8px 0">Files</div>
+          <div class="list" id="filesList"><div class="muted">Select a repository.</div></div>
+
+          <div class="section-title" style="margin: 14px 0 8px 0">Repositories</div>
+          <div class="list" id="reposList"><div class="muted">Loading…</div></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-h">
+          <div class="row" style="justify-content: space-between">
+            <div>
+              <div class="section-title">Details</div>
+              <div class="muted" id="selectionHint" style="font-size: 12px; margin-top: 4px">Pick a function to view details.</div>
+            </div>
+            <div class="row">
+              <button id="btnOptimize" disabled>Optimize selected function</button>
+              <button id="btnAccept" disabled>Accept</button>
+              <button id="btnReject" disabled>Reject</button>
+            </div>
+          </div>
+        </div>
+        <div class="body" id="details">
+          <div class="muted">No function selected.</div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("status");
+
+      const state = {
+        repos: [],
+        selectedRepoId: null,
+        files: [],
+        selectedFileId: null,
+        functions: [],
+        selectedFnId: null,
+        fnDetail: null,
+        lastDownloadUrl: null,
+      };
+
+      function setStatus(text) {
+        statusEl.textContent = text;
+      }
+
+      function fmt1(x) {
+        const n = Number(x);
+        if (!Number.isFinite(n)) return "—";
+        return n.toFixed(1);
+      }
+
+      async function api(path, opts = {}) {
+        const res = await fetch(path, {
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        });
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+        if (!res.ok) {
+          const msg = (data && (data.error || data.detail)) || res.statusText || "Request failed";
+          throw new Error(msg);
+        }
+        return data;
+      }
+
+      function renderRepos() {
+        const el = $("reposList");
+        el.innerHTML = "";
+        if (!state.repos.length) {
+          el.innerHTML = '<div class="muted">No repositories yet.</div>';
+          return;
+        }
+        for (const r of state.repos) {
+          const div = document.createElement("div");
+          div.className = "item" + (state.selectedRepoId === r.id ? " active" : "");
+          div.textContent = `${r.id} ${r.name}`;
+          div.onclick = () => selectRepo(r.id);
+          el.appendChild(div);
+        }
+      }
+
+      function renderFiles() {
+        const el = $("filesList");
+        el.innerHTML = "";
+        if (!state.selectedRepoId) {
+          el.innerHTML = '<div class="muted">Select a repository.</div>';
+          return;
+        }
+        if (!state.files.length) {
+          el.innerHTML = '<div class="muted">No files found for this repo.</div>';
+          return;
+        }
+        for (const f of state.files) {
+          const div = document.createElement("div");
+          div.className = "item" + (state.selectedFileId === f.id ? " active" : "");
+          div.innerHTML = `<div class="mono">${f.file_path}</div>`;
+          div.onclick = () => selectFile(f.id);
+          el.appendChild(div);
+        }
+      }
+
+      function renderFunctions() {
+        const root = $("details");
+        const fns = state.functions || [];
+        if (!state.selectedFileId) {
+          root.innerHTML = '<div class="muted">Select a file to see functions.</div>';
+          return;
+        }
+        let html = `<div class="section-title" style="margin-bottom: 8px">Functions</div>`;
+        html += `<div class="list">`;
+        for (const fn of fns) {
+          const active = state.selectedFnId === fn.id ? " active" : "";
+          html += `<div class="item${active}" data-fn="${fn.id}">
+            <div><b>${fn.function_name}</b></div>
+            <div class="muted" style="font-size: 12px">Lines ${fn.start_line}–${fn.end_line}</div>
+          </div>`;
+        }
+        html += `</div>`;
+        root.innerHTML = html;
+        root.querySelectorAll("[data-fn]").forEach((node) => {
+          node.onclick = () => selectFunction(Number(node.getAttribute("data-fn")));
+        });
+      }
+
+      function renderFunctionDetail() {
+        const d = state.fnDetail;
+        const root = $("details");
+        if (!d) {
+          renderFunctions();
+          return;
+        }
+
+        const before = d.before || null;
+        const after = d.after || null;
+        const comparison = d.comparison || {};
+
+        const beforePeak = before ? fmt1(before.peak_memory) + " MB" : "—";
+        const afterPeak = after ? fmt1(after.peak_memory) + " MB" : "—";
+        const beforeTime = before ? fmt1(before.execution_time) + " s" : "—";
+        const afterTime = after ? fmt1(after.execution_time) + " s" : "—";
+
+        const improved = comparison.improved === true;
+        const pct = (comparison.improvement_pct != null) ? fmt1(comparison.improvement_pct) + "%" : "—";
+
+        const chartUrl = `/function/${d.function.id}/memory-chart.png?ts=${Date.now()}`;
+        const downloadHtml = state.lastDownloadUrl
+          ? `<div class="pill" style="margin-top: 10px">
+               <b>Download updated code</b>
+               <a href="${state.lastDownloadUrl}" style="color: var(--accent); margin-left: 8px" download>Download</a>
+             </div>`
+          : "";
+
+        root.innerHTML = `
+          <div class="kpi" style="margin-bottom: 12px">
+            <div class="pill"><b>Old peak</b> <span class="${improved ? "" : ""}">${beforePeak}</span></div>
+            <div class="pill"><b>Old time</b> ${beforeTime}</div>
+            <div class="pill"><b>Optimized peak</b> <span class="${improved ? "ok" : "danger"}">${afterPeak}</span></div>
+            <div class="pill"><b>Optimized time</b> ${afterTime}</div>
+            <div class="pill"><b>Improvement</b> <span class="${improved ? "ok" : "danger"}">${pct}</span></div>
+          </div>
+
+          <div class="chart-wrap" style="margin-bottom: 12px">
+            <img alt="Memory chart" src="${chartUrl}" />
+          </div>
+          ${downloadHtml}
+
+          <div class="split">
+            <div>
+              <div class="section-title" style="margin-bottom: 8px">Original code</div>
+              <div class="code">${escapeHtml(d.function.original_code || "")}</div>
+            </div>
+            <div>
+              <div class="section-title" style="margin-bottom: 8px">Optimized code</div>
+              <div class="code">${escapeHtml(d.function.optimized_code || "")}</div>
+            </div>
+          </div>
+        `;
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+
+      async function refreshRepos() {
+        setStatus("Loading repositories…");
+        state.repos = (await api("/repos"))?.repos || [];
+        renderRepos();
+        setStatus("Ready");
+      }
+
+      async function selectRepo(repoId) {
+        state.selectedRepoId = repoId;
+        state.selectedFileId = null;
+        state.selectedFnId = null;
+        state.fnDetail = null;
+        state.lastDownloadUrl = null;
+        renderRepos();
+        setStatus("Loading files…");
+        state.files = (await api(`/files/${repoId}`))?.files || [];
+        renderFiles();
+        $("details").innerHTML = '<div class="muted">Select a file to see functions.</div>';
+        setStatus("Ready");
+      }
+
+      async function selectFile(fileId) {
+        state.selectedFileId = fileId;
+        state.selectedFnId = null;
+        state.fnDetail = null;
+        state.lastDownloadUrl = null;
+        renderFiles();
+        setStatus("Loading functions…");
+        state.functions = (await api(`/functions/${fileId}`))?.functions || [];
+        renderFunctions();
+        setStatus("Ready");
+      }
+
+      async function selectFunction(fnId) {
+        state.selectedFnId = fnId;
+        state.lastDownloadUrl = null;
+        setStatus("Loading function…");
+        state.fnDetail = await api(`/function/${fnId}`);
+        renderFunctionDetail();
+        $("btnOptimize").disabled = false;
+        $("btnAccept").disabled = false;
+        $("btnReject").disabled = false;
+        setStatus("Ready");
+      }
+
+      async function ingestGithub() {
+        const url = $("githubUrl").value.trim();
+        if (!url) return;
+        setStatus("Ingesting GitHub repo…");
+        await api("/repos/ingest/github", { method: "POST", body: JSON.stringify({ url }) });
+        await refreshRepos();
+        setStatus("Ready");
+      }
+
+      async function ingestFile() {
+        const file = $("fileUpload").files[0];
+        if (!file) return;
+        setStatus("Uploading file…");
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch("/repos/ingest/file", { method: "POST", body: form });
+        if (!res.ok) throw new Error((await res.text()) || "Upload failed");
+        await refreshRepos();
+        setStatus("Ready");
+      }
+
+      async function optimizeSelected() {
+        if (!state.selectedFnId) return;
+        setStatus("Optimizing…");
+        state.fnDetail = await api(`/optimize/${state.selectedFnId}`, { method: "POST", body: "{}" });
+        renderFunctionDetail();
+        setStatus("Ready");
+      }
+
+      async function decide(action) {
+        if (!state.selectedFnId) return;
+        setStatus("Saving decision…");
+        const resp = await api(`/function/${state.selectedFnId}/decision`, { method: "POST", body: JSON.stringify({ action }) });
+        if (action === "accept" && resp && resp.download_url) {
+          state.lastDownloadUrl = resp.download_url;
+        } else {
+          state.lastDownloadUrl = null;
+        }
+        state.fnDetail = await api(`/function/${state.selectedFnId}`);
+        renderFunctionDetail();
+        setStatus("Ready");
+      }
+
+      $("btnIngestGithub").onclick = () => ingestGithub().catch((e) => setStatus(e.message));
+      $("btnIngestFile").onclick = () => ingestFile().catch((e) => setStatus(e.message));
+      $("btnOptimize").onclick = () => optimizeSelected().catch((e) => setStatus(e.message));
+      $("btnAccept").onclick = () => decide("accept").catch((e) => setStatus(e.message));
+      $("btnReject").onclick = () => decide("reject").catch((e) => setStatus(e.message));
+
+      refreshRepos().catch((e) => setStatus(e.message));
+    </script>
+  </body>
+</html>
+

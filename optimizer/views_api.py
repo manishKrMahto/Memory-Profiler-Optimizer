@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import io
 import os
 import time
@@ -38,6 +39,43 @@ def _log_code_block(title: str, code: str) -> None:
     c = (code or "").rstrip()
     shown = c if len(c) <= max_chars else (c[:max_chars] + "\n... [truncated] ...")
     _log_step(title, shown.splitlines())
+
+
+def _extract_top_level_import_specs(module_text: str) -> List[Dict[str, Any]]:
+    """
+    Extract top-level imports into a structured form for dependency injection in the profiler.
+    """
+    if not module_text:
+        return []
+    try:
+        tree = ast.parse(module_text)
+    except Exception:
+        return []
+
+    specs: List[Dict[str, Any]] = []
+    for node in getattr(tree, "body", []) or []:
+        if isinstance(node, ast.Import):
+            for a in node.names or []:
+                name = getattr(a, "name", None)
+                if not name:
+                    continue
+                specs.append({"type": "import", "module": str(name), "as": getattr(a, "asname", None)})
+        elif isinstance(node, ast.ImportFrom):
+            # Ignore relative imports for fallback execution; they generally require package context.
+            level = int(getattr(node, "level", 0) or 0)
+            mod = getattr(node, "module", None)
+            if level and not mod:
+                continue
+            if level:
+                continue
+            if not mod:
+                continue
+            for a in node.names or []:
+                nm = getattr(a, "name", None)
+                if not nm or nm == "*":
+                    continue
+                specs.append({"type": "from", "module": str(mod), "name": str(nm), "as": getattr(a, "asname", None)})
+    return specs
 
 
 @require_GET
@@ -162,40 +200,6 @@ def function_detail(request: HttpRequest, fn_id: int) -> JsonResponse:
 
 @csrf_exempt
 @require_POST
-def ingest_github(request: HttpRequest) -> JsonResponse:
-    try:
-        import json
-
-        payload = json.loads((request.body or b"{}").decode("utf-8", errors="replace") or "{}")
-        url = (payload.get("url") or "").strip()
-        if not url:
-            return _json_error("Missing url")
-
-        repo_uid, repo_root = ingest_service.ingest_github_repo(url)
-        name = Path(repo_root).name
-        repo = Repository.objects.create(name=name, path=str(repo_root))
-
-        # Scan files + functions
-        py_files = file_service.get_python_files(repo_root)
-        for rel in py_files:
-            rf = RepoFile.objects.create(repo=repo, file_path=rel)
-            meta = ast_service.extract_functions((Path(repo_root) / rel), repo_root=repo_root)
-            for fnm in meta:
-                Function.objects.create(
-                    file=rf,
-                    function_name=fnm.function_name,
-                    start_line=fnm.start_line,
-                    end_line=fnm.end_line,
-                    original_code=fnm.code,
-                )
-
-        return JsonResponse({"repo": {"id": repo.id, "name": repo.name, "path": repo.path, "repo_uid": repo_uid}})
-    except Exception as e:
-        return _json_error(str(e))
-
-
-@csrf_exempt
-@require_POST
 def ingest_single_file(request: HttpRequest) -> JsonResponse:
     try:
         up = request.FILES.get("file")
@@ -241,6 +245,12 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
     repo_root = Path(fn.file.repo.path).resolve()
     rel_path = fn.file.file_path
     abs_file = (repo_root / rel_path).resolve()
+    module_text = ""
+    try:
+        module_text = abs_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        module_text = ""
+    import_specs = _extract_top_level_import_specs(module_text)
 
     _log_step(
         "OPTIMIZE START",
@@ -256,6 +266,14 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
     # Profile original
     _log_step("STEP 1/4: Profile original")
     before = profiler_service.profile_function(abs_file, fn.function_name, timeout_s=profiler_service.DEFAULT_TIMEOUT_S)
+    if before.error:
+        _log_step("PROFILE FALLBACK", ["module import/call failed; retrying with extracted function code"])
+        before = profiler_service.profile_function_code(
+            fn.original_code or "",
+            fn.function_name,
+            timeout_s=profiler_service.DEFAULT_TIMEOUT_S,
+            import_specs=import_specs,
+        )
     ProfilingResult.objects.create(
         function=fn,
         version="original",
@@ -289,6 +307,14 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
     # Profile optimized code
     _log_step("STEP 3/4: Profile optimized")
     after = profiler_service.profile_optimized_function(abs_file, fn.function_name, fn.optimized_code, timeout_s=profiler_service.DEFAULT_TIMEOUT_S)
+    if after.error:
+        _log_step("PROFILE FALLBACK", ["module import/call failed; retrying with extracted optimized code"])
+        after = profiler_service.profile_function_code(
+            fn.optimized_code or "",
+            fn.function_name,
+            timeout_s=profiler_service.DEFAULT_TIMEOUT_S,
+            import_specs=import_specs,
+        )
     ProfilingResult.objects.create(
         function=fn,
         version="optimized",
@@ -434,9 +460,10 @@ def function_memory_chart_png(request: HttpRequest, fn_id: int) -> HttpResponse:
         for spine in ax.spines.values():
             spine.set_color((1, 1, 1, 0.25))
 
-        leg = ax.legend(loc="best", frameon=False)
-        for t in leg.get_texts():
-            t.set_color("white")
+        if old or new:
+            leg = ax.legend(loc="best", frameon=False)
+            for t in leg.get_texts():
+                t.set_color("white")
 
         fig.patch.set_facecolor("none")
         ax.set_facecolor("none")

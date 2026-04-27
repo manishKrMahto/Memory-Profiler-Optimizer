@@ -27,7 +27,6 @@ urlpatterns = [
     # Old Phase 1 UI (kept)
     path('phase1/', views.index, name='index_phase1'),
     path('api/repos/ingest', views.ingest_repo, name='ingest_repo'),
-    path('api/repos/ingest/github', views.ingest_github, name='ingest_github'),
     path('api/repos/ingest/file', views.ingest_single_file, name='ingest_single_file'),
     path('api/repos/<str:repo_id>/tree', views.repo_tree, name='repo_tree'),
     path('api/repos/<str:repo_id>/file', views.repo_file, name='repo_file'),

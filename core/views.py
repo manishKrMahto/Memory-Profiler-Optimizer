@@ -25,7 +25,6 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from git import Repo
 from langgraph.graph import END, START, StateGraph
 from memory_profiler import LineProfiler, memory_usage
 
@@ -170,36 +169,7 @@ def _db_all(sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
 
 
 def _normalize_github_url(raw: str) -> str:
-    """
-    Accepts common GitHub HTTPS URL forms and normalizes them.
-    Only allows github.com URLs in Phase 1.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        raise ValueError("Missing repo URL")
-
-    # Allow users to paste without scheme.
-    if raw.startswith("github.com/"):
-        raw = "https://" + raw
-
-    u = urlparse(raw)
-    if u.scheme not in ("http", "https"):
-        raise ValueError("Repo URL must start with http(s)://")
-    host = (u.netloc or "").lower()
-    if host != "github.com":
-        raise ValueError("Only github.com repos are supported in Phase 1")
-    path = (u.path or "").strip("/")
-    parts = [p for p in path.split("/") if p]
-    if len(parts) < 2:
-        raise ValueError("GitHub URL must look like https://github.com/<owner>/<repo>")
-
-    owner, repo = parts[0], parts[1]
-    if repo.endswith(".git"):
-        repo = repo[:-4]
-    if not owner or not repo:
-        raise ValueError("Invalid GitHub repo URL")
-
-    return f"https://github.com/{owner}/{repo}.git"
+    raise ValueError("GitHub ingestion has been removed; upload a single .py file instead.")
 
 
 def _safe_join(root: Path, relative_path: str) -> Path:
@@ -849,22 +819,11 @@ def index(request: HttpRequest) -> HttpResponse:
         </div>
         <div class="content">
           <div class="row" style="margin-bottom: 10px;">
-            <label class="pill" style="cursor:pointer;">
-              <input type="radio" name="ingestMode" value="github" checked style="margin-right:6px;" />
-              GitHub repo URL
-            </label>
-            <label class="pill" style="cursor:pointer;">
-              <input type="radio" name="ingestMode" value="file" style="margin-right:6px;" />
-              Single code file
-            </label>
+            <span class="pill">Single code file (.py)</span>
           </div>
 
           <form id="ingestForm">
-            <div id="githubBox">
-              <input id="repoUrl" type="text" placeholder="https://github.com/owner/repo" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background: rgba(255,255,255,0.03); color: var(--text);" />
-              <div class="muted" style="font-size: 12px; margin-top: 6px;">Clones shallowly (depth=1). Private repos not supported in Phase 1.</div>
-            </div>
-            <div id="fileBox" style="display:none;">
+            <div id="fileBox">
               <input type="file" id="codeFile" name="file" />
               <div class="muted" style="font-size: 12px; margin-top: 6px;">Uploads one file and shows it in the explorer.</div>
             </div>
@@ -938,9 +897,7 @@ def index(request: HttpRequest) -> HttpResponse:
         repoPill: document.getElementById('repoPill'),
         statsPill: document.getElementById('statsPill'),
         ingestForm: document.getElementById('ingestForm'),
-        repoUrl: document.getElementById('repoUrl'),
         codeFile: document.getElementById('codeFile'),
-        githubBox: document.getElementById('githubBox'),
         fileBox: document.getElementById('fileBox'),
         ingestBtn: document.getElementById('ingestBtn'),
         refreshBtn: document.getElementById('refreshBtn'),
@@ -993,17 +950,6 @@ def index(request: HttpRequest) -> HttpResponse:
         return data;
       }}
 
-      async function ingestGithub(url) {{
-        const res = await fetch('/api/repos/ingest/github', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ url }})
-        }});
-        const data = await res.json().catch(() => ({{}}));
-        if (!res.ok) throw new Error(data.error || `Ingest failed (${{res.status}})`);
-        return data;
-      }}
-
       async function ingestSingleFile(file) {{
         const fd = new FormData();
         fd.append('file', file);
@@ -1028,15 +974,8 @@ def index(request: HttpRequest) -> HttpResponse:
         return data;
       }}
 
-      async function startOptimization(repoUrl) {{
-        const res = await fetch('/optimize-repo/', {{
-          method: 'POST',
-          headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ repo_url: repoUrl }})
-        }});
-        const data = await res.json().catch(() => ({{}}));
-        if (!res.ok) throw new Error(data.error || `Start failed (${{res.status}})`);
-        return data;
+      async function startOptimization() {{
+        throw new Error('GitHub-based optimization has been removed in this build.');
       }}
 
       async function fetchResults() {{
@@ -1123,46 +1062,18 @@ def index(request: HttpRequest) -> HttpResponse:
         renderTree(tree, el.tree, 0);
       }}
 
-      function getMode() {{
-        const r = document.querySelector('input[name=\"ingestMode\"]:checked');
-        return r ? r.value : 'github';
-      }}
-
-      function syncModeUI() {{
-        const mode = getMode();
-        el.githubBox.style.display = mode === 'github' ? 'block' : 'none';
-        el.fileBox.style.display = mode === 'file' ? 'block' : 'none';
-        showErr(el.uploadErr, '');
-      }}
-
-      document.querySelectorAll('input[name=\"ingestMode\"]').forEach(i => {{
-        i.addEventListener('change', syncModeUI);
-      }});
-      syncModeUI();
-
       el.ingestForm.addEventListener('submit', async (ev) => {{
         ev.preventDefault();
         showErr(el.uploadErr, '');
-        const mode = getMode();
         el.ingestBtn.disabled = true;
         el.ingestBtn.textContent = 'Ingesting…';
         try {{
-          let data = null;
-          if (mode === 'github') {{
-            const url = (el.repoUrl.value || '').trim();
-            if (!url) {{
-              showErr(el.uploadErr, 'Paste a GitHub repo URL first.');
-              return;
-            }}
-            data = await ingestGithub(url);
-          }} else {{
-            const file = el.codeFile.files && el.codeFile.files[0];
-            if (!file) {{
-              showErr(el.uploadErr, 'Choose a code file first.');
-              return;
-            }}
-            data = await ingestSingleFile(file);
+          const file = el.codeFile.files && el.codeFile.files[0];
+          if (!file) {{
+            showErr(el.uploadErr, 'Choose a code file first.');
+            return;
           }}
+          const data = await ingestSingleFile(file);
           setRepo(data.repo_id, data.stats);
           state.tree = data.tree;
           showTree(state.tree);
@@ -1244,16 +1155,10 @@ def index(request: HttpRequest) -> HttpResponse:
       el.startOptBtn.addEventListener('click', async () => {{
         showErr(el.optErr, '');
         if (!state.repoId) return;
-        // Optimization uses the last GitHub URL entered (Phase: GitHub ingestion only)
-        const url = (el.repoUrl.value || '').trim();
-        if (!url) {{
-          showErr(el.optErr, 'Paste the GitHub repo URL (used for optimization).');
-          return;
-        }}
         el.startOptBtn.disabled = true;
         el.startOptBtn.textContent = 'Starting…';
         try {{
-          const r = await startOptimization(url);
+          const r = await startOptimization();
           state.runId = r.run_id;
           el.runPill.textContent = `Run: ${{state.runId}} (${{r.status}})`;
           // poll results
@@ -1343,56 +1248,7 @@ def ingest_repo(request: HttpRequest) -> JsonResponse:
 @csrf_exempt
 @require_POST
 def ingest_github(request: HttpRequest) -> JsonResponse:
-    """
-    Ingest a repository by cloning from a GitHub URL (public repos only).
-    Body: { "url": "https://github.com/owner/repo" }
-    """
-    try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        return JsonResponse({"error": "Invalid JSON body"}, status=400)
-
-    try:
-        url = _normalize_github_url(str(payload.get("url", "")))
-    except ValueError as e:
-        return JsonResponse({"error": str(e)}, status=400)
-
-    repo_id = _new_repo_id()
-    store_root = _repo_store_root()
-    repo_root = store_root / repo_id
-    tmp_dir = store_root / f"{repo_id}_tmp"
-
-    try:
-        tmp_dir.mkdir(parents=True, exist_ok=False)
-        repo_root.mkdir(parents=True, exist_ok=False)
-
-        # Shallow clone to reduce bandwidth/time; GitPython uses git under the hood.
-        Repo.clone_from(url, repo_root.as_posix(), depth=1, multi_options=["--no-tags"])
-
-        # Remove .git directory to avoid exposing git internals & reduce tree noise.
-        shutil.rmtree(repo_root / ".git", ignore_errors=True)
-
-        tree, stats = _build_tree(repo_root)
-        return JsonResponse(
-            {
-                "repo_id": repo_id,
-                "source": "github",
-                "url": url,
-                "tree": tree.to_dict(),
-                "stats": stats,
-            }
-        )
-    except subprocess.CalledProcessError:
-        shutil.rmtree(repo_root, ignore_errors=True)
-        return JsonResponse({"error": "Git clone failed"}, status=400)
-    except ValueError as e:
-        shutil.rmtree(repo_root, ignore_errors=True)
-        return JsonResponse({"error": str(e)}, status=400)
-    except Exception:
-        shutil.rmtree(repo_root, ignore_errors=True)
-        return JsonResponse({"error": "Unexpected error during GitHub ingestion"}, status=500)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return JsonResponse({"error": "GitHub ingestion has been removed; upload a single .py file instead."}, status=410)
 
 
 @csrf_exempt
@@ -1604,21 +1460,7 @@ def _build_langgraph() -> Any:
     g: StateGraph = StateGraph(PipelineState)
 
     def n1_repo_ingest(state: PipelineState) -> PipelineState:
-        run_id = state["run_id"]
-        _node_event(run_id, "repo_ingest", "start", {})
-        repo_url = state["repo_url"]
-        url = _normalize_github_url(repo_url)
-        repo_id = _new_repo_id()
-        store_root = _repo_store_root()
-        repo_root = store_root / repo_id
-        repo_root.mkdir(parents=True, exist_ok=False)
-        Repo.clone_from(url, repo_root.as_posix(), depth=1, multi_options=["--no-tags"])
-        shutil.rmtree(repo_root / ".git", ignore_errors=True)
-        state["repo_id"] = repo_id
-        state["repo_path"] = str(repo_root)
-        _update_run(run_id, repo_url=repo_url, repo_id=repo_id, repo_path=str(repo_root))
-        _node_event(run_id, "repo_ingest", "end", {"repo_id": repo_id})
-        return state
+        raise RuntimeError("GitHub ingestion has been removed; pipeline entrypoint is disabled.")
 
     def n2_file_scan(state: PipelineState) -> PipelineState:
         run_id = state["run_id"]
@@ -1817,41 +1659,10 @@ def _run_pipeline_background(run_id: str, repo_url: str, config: Dict[str, Any])
 @csrf_exempt
 @require_POST
 def optimize_repo(request: HttpRequest) -> JsonResponse:
-    """
-    POST /optimize-repo/
-    Body: { "repo_url": "https://github.com/owner/repo", "config": {...optional...} }
-    """
-    try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        return JsonResponse({"error": "Invalid JSON body"}, status=400)
-
-    repo_url = str(payload.get("repo_url", "")).strip()
-    if not repo_url:
-        return JsonResponse({"error": "Missing repo_url"}, status=400)
-
-    # Validate early
-    try:
-        _normalize_github_url(repo_url)
-    except ValueError as e:
-        return JsonResponse({"error": str(e)}, status=400)
-
-    config = payload.get("config") or {}
-    if not isinstance(config, dict):
-        config = {}
-
-    run_id = uuid.uuid4().hex
-    now = _now_ms()
-    _ensure_db()
-    _db_exec(
-        "INSERT INTO optimization_run (id, created_at_ms, updated_at_ms, status, repo_url, config_json) VALUES (?,?,?,?,?,?)",
-        (run_id, now, now, "queued", repo_url, json.dumps(config)),
+    return JsonResponse(
+        {"error": "GitHub-based repo optimization has been removed; upload a single .py file instead."},
+        status=410,
     )
-
-    t = threading.Thread(target=_run_pipeline_background, args=(run_id, repo_url, config), daemon=True)
-    _RUN_THREADS[run_id] = t
-    t.start()
-    return JsonResponse({"run_id": run_id, "status": "queued"})
 
 
 @require_GET

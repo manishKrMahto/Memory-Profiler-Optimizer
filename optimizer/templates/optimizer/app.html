@@ -123,10 +123,6 @@
           <div class="section-title">Ingest</div>
         </div>
         <div class="body">
-          <div class="row" style="margin-bottom: 10px">
-            <input id="githubUrl" type="text" placeholder="GitHub URL (https://github.com/owner/repo)" />
-            <button id="btnIngestGithub">Ingest GitHub</button>
-          </div>
           <div class="row" style="margin-bottom: 14px">
             <input id="fileUpload" type="file" accept=".py" />
             <button id="btnIngestFile">Ingest .py File</button>
@@ -366,15 +362,6 @@
         setStatus("Ready");
       }
 
-      async function ingestGithub() {
-        const url = $("githubUrl").value.trim();
-        if (!url) return;
-        setStatus("Ingesting GitHub repo…");
-        await api("/repos/ingest/github", { method: "POST", body: JSON.stringify({ url }) });
-        await refreshRepos();
-        setStatus("Ready");
-      }
-
       async function ingestFile() {
         const file = $("fileUpload").files[0];
         if (!file) return;
@@ -409,7 +396,6 @@
         setStatus("Ready");
       }
 
-      $("btnIngestGithub").onclick = () => ingestGithub().catch((e) => setStatus(e.message));
       $("btnIngestFile").onclick = () => ingestFile().catch((e) => setStatus(e.message));
       $("btnOptimize").onclick = () => optimizeSelected().catch((e) => setStatus(e.message));
       $("btnAccept").onclick = () => decide("accept").catch((e) => setStatus(e.message));

@@ -18,7 +18,6 @@ urlpatterns = [
     path("file/<int:file_id>/merged", views_api.file_merged_code, name="file_merged_code"),
     path("file/<int:file_id>/download", views_api.file_download, name="file_download"),
     # Ingestion helpers (upload / GitHub)
-    path("repos/ingest/github", views_api.ingest_github, name="ingest_github_v2"),
     path("repos/ingest/file", views_api.ingest_single_file, name="ingest_single_file_v2"),
     # Debug
     path("_debug/module", views_api._debug_module, name="debug_module"),

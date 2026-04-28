@@ -32,7 +32,7 @@ def _strip_code_fences(text: str) -> str:
     return t
 
 
-def optimize_function_with_llm(function_code: str, memory_data: Dict[str, Any]) -> LLMOptimization:
+def optimize_function_with_llm(function_code: str, memory_data: Dict[str, Any], *, language: str = "python") -> LLMOptimization:
     """
     Input:
     - function_code: original function code (string)
@@ -64,16 +64,26 @@ def optimize_function_with_llm(function_code: str, memory_data: Dict[str, Any]) 
         client_kwargs["base_url"] = base_url
     client = OpenAI(**client_kwargs)
 
+    lang = (language or "python").strip().lower()
+    is_node = lang in {"js", "javascript", "ts", "typescript", "node"}
+
+    rules: List[str] = [
+        "Do NOT change functionality.",
+        "Do NOT rename the function or change its signature.",
+        "Do NOT add new third-party dependencies.",
+        "Output improved code ONLY (no markdown fences, no explanations).",
+        "If no safe improvement exists, output the original code unchanged.",
+    ]
+    if not is_node:
+        rules.insert(
+            3,
+            "If you switch return type (e.g., list -> generator), you MUST mention it explicitly (but still output code only).",
+        )
+
     prompt = {
         "goal": "Optimize the function for memory usage.",
-        "rules": [
-            "Do NOT change functionality.",
-            "Do NOT rename the function or change its signature.",
-            "Do NOT add new third-party dependencies.",
-            "If you switch return type (e.g., list -> generator), you MUST mention it explicitly (but still output code only).",
-            "Output improved code ONLY (no markdown fences, no explanations).",
-            "If no safe improvement exists, output the original code unchanged.",
-        ],
+        "language": "javascript/typescript" if is_node else "python",
+        "rules": rules,
         "function_code": function_code,
         "profiler": {
             "memory_usage": memory_data.get("memory_usage", []),
@@ -83,7 +93,10 @@ def optimize_function_with_llm(function_code: str, memory_data: Dict[str, Any]) 
         },
     }
 
-    system = "You are a senior Python performance engineer. Optimize strictly for memory and keep behavior identical."
+    if is_node:
+        system = "You are a senior JavaScript/TypeScript performance engineer. Optimize strictly for memory and keep behavior identical."
+    else:
+        system = "You are a senior Python performance engineer. Optimize strictly for memory and keep behavior identical."
 
     try:
         resp = client.responses.create(
@@ -98,15 +111,27 @@ def optimize_function_with_llm(function_code: str, memory_data: Dict[str, Any]) 
         code = _strip_code_fences(text)
         if not code:
             return LLMOptimization(optimized_code=function_code, raw_text=text, error="empty_llm_response")
-        # Validate: must be syntactically valid Python (AST parseable)
-        try:
-            ast.parse(code)
-        except SyntaxError as e:
-            return LLMOptimization(
-                optimized_code=function_code,
-                raw_text=text,
-                error=f"llm_returned_invalid_python: {e}",
-            )
+        if not is_node:
+            # Validate: must be syntactically valid Python (AST parseable)
+            try:
+                ast.parse(code)
+            except SyntaxError as e:
+                return LLMOptimization(
+                    optimized_code=function_code,
+                    raw_text=text,
+                    error=f"llm_returned_invalid_python: {e}",
+                )
+        else:
+            # JS/TS validation: lightweight checks only (avoid rejecting valid TS with type syntax).
+            # Ensure the function name still exists in the returned code.
+            m = re.search(r"\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\b", function_code or "")
+            expected = m.group(1) if m else None
+            if expected and expected not in code:
+                return LLMOptimization(
+                    optimized_code=function_code,
+                    raw_text=text,
+                    error="llm_returned_invalid_js: function name missing",
+                )
         return LLMOptimization(optimized_code=code, raw_text=text, error="")
     except Exception as e:
         return LLMOptimization(optimized_code=function_code, error=str(e))

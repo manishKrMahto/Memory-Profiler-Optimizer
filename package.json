@@ -1,0 +1,15 @@
+{
+  "name": "memory-profiler-optimizer-node-tools",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "node:parse": "tsx backend/parser/js_ast_parser.ts",
+    "node:profile": "tsx backend/profiler/node_profiler.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
+

@@ -12,6 +12,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from optimizer import ast_service, file_service, ingest_service, llm_service, profiler_service
+from optimizer import js_ast_service, language_service, node_profiler_service
 from optimizer.models import Function, ProfilingResult, RepoFile, Repository
 
 
@@ -206,8 +207,8 @@ def ingest_single_file(request: HttpRequest) -> JsonResponse:
         if up is None:
             return _json_error("Missing file upload")
         filename = os.path.basename(getattr(up, "name", "") or "uploaded.py")
-        if not filename.endswith(".py"):
-            return _json_error("Only .py files are supported")
+        if not language_service.is_supported_ingest(filename):
+            return _json_error("Only .py, .js, .ts files are supported")
 
         repo_uid, repo_root = ingest_service._new_repo_dir()  # type: ignore[attr-defined]
         abs_file = (repo_root / filename).resolve()
@@ -218,7 +219,11 @@ def ingest_single_file(request: HttpRequest) -> JsonResponse:
         repo = Repository.objects.create(name=Path(repo_root).name, path=str(repo_root))
         rel = Path(filename).as_posix()
         rf = RepoFile.objects.create(repo=repo, file_path=rel)
-        meta = ast_service.extract_functions(abs_file, repo_root=repo_root)
+        lang = language_service.detect_language(abs_file)
+        if lang == "node":
+            meta = js_ast_service.extract_functions(abs_file, repo_root=repo_root)
+        else:
+            meta = ast_service.extract_functions(abs_file, repo_root=repo_root)
         for fnm in meta:
             Function.objects.create(
                 file=rf,
@@ -245,6 +250,8 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
     repo_root = Path(fn.file.repo.path).resolve()
     rel_path = fn.file.file_path
     abs_file = (repo_root / rel_path).resolve()
+    lang = language_service.detect_language(abs_file)
+    node_lang = abs_file.suffix.lower().lstrip(".")  # js/ts/jsx/tsx
     module_text = ""
     try:
         module_text = abs_file.read_text(encoding="utf-8", errors="replace")
@@ -265,15 +272,23 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
 
     # Profile original
     _log_step("STEP 1/4: Profile original")
-    before = profiler_service.profile_function(abs_file, fn.function_name, timeout_s=profiler_service.DEFAULT_TIMEOUT_S)
-    if before.error:
-        _log_step("PROFILE FALLBACK", ["module import/call failed; retrying with extracted function code"])
-        before = profiler_service.profile_function_code(
+    if lang == "node":
+        before = node_profiler_service.profile_function_code(
             fn.original_code or "",
             fn.function_name,
-            timeout_s=profiler_service.DEFAULT_TIMEOUT_S,
-            import_specs=import_specs,
+            timeout_s=node_profiler_service.DEFAULT_TIMEOUT_S,
+            language=node_lang,
         )
+    else:
+        before = profiler_service.profile_function(abs_file, fn.function_name, timeout_s=profiler_service.DEFAULT_TIMEOUT_S)
+        if before.error:
+            _log_step("PROFILE FALLBACK", ["module import/call failed; retrying with extracted function code"])
+            before = profiler_service.profile_function_code(
+                fn.original_code or "",
+                fn.function_name,
+                timeout_s=profiler_service.DEFAULT_TIMEOUT_S,
+                import_specs=import_specs,
+            )
     ProfilingResult.objects.create(
         function=fn,
         version="original",
@@ -298,6 +313,7 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
     opt = llm_service.optimize_function_with_llm(
         fn.original_code,
         {"memory_usage": before.memory_usage, "peak_memory": before.peak_memory, "execution_time": before.execution_time, "error": before.error},
+        language=("node" if lang == "node" else "python"),
     )
     fn.optimized_code = opt.optimized_code or fn.original_code
     fn.save(update_fields=["optimized_code", "updated_at"])
@@ -306,15 +322,23 @@ def optimize_function(request: HttpRequest, function_id: int) -> JsonResponse:
 
     # Profile optimized code
     _log_step("STEP 3/4: Profile optimized")
-    after = profiler_service.profile_optimized_function(abs_file, fn.function_name, fn.optimized_code, timeout_s=profiler_service.DEFAULT_TIMEOUT_S)
-    if after.error:
-        _log_step("PROFILE FALLBACK", ["module import/call failed; retrying with extracted optimized code"])
-        after = profiler_service.profile_function_code(
+    if lang == "node":
+        after = node_profiler_service.profile_function_code(
             fn.optimized_code or "",
             fn.function_name,
-            timeout_s=profiler_service.DEFAULT_TIMEOUT_S,
-            import_specs=import_specs,
+            timeout_s=node_profiler_service.DEFAULT_TIMEOUT_S,
+            language=node_lang,
         )
+    else:
+        after = profiler_service.profile_optimized_function(abs_file, fn.function_name, fn.optimized_code, timeout_s=profiler_service.DEFAULT_TIMEOUT_S)
+        if after.error:
+            _log_step("PROFILE FALLBACK", ["module import/call failed; retrying with extracted optimized code"])
+            after = profiler_service.profile_function_code(
+                fn.optimized_code or "",
+                fn.function_name,
+                timeout_s=profiler_service.DEFAULT_TIMEOUT_S,
+                import_specs=import_specs,
+            )
     ProfilingResult.objects.create(
         function=fn,
         version="optimized",

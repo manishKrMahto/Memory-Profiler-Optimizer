@@ -4,3 +4,18 @@ __pycache__/
 roughs/
 repo_store/
 .cls
+
+# Node/TypeScript tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+
+# Local DB / backups
+db.sqlite3
+*.sqlite3
+*.bak_*
+*.bak_fn*

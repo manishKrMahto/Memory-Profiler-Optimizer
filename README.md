@@ -61,10 +61,13 @@ flowchart TB
 
 ## Setup
 
+you must have python and node install (to work with typescript and javascript files)
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+npm install
 python manage.py migrate
 python manage.py runserver
 ```

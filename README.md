@@ -1,21 +1,63 @@
-# Memory Profiler Optimizer (Django)
+# Memory Profiler Optimizer
 
-Production-minded Django app that:
+Production-minded **Django** app that ingests a **single source file**, extracts callable units, profiles memory (and timing), optionally **optimizes** them with an **LLM**, and lets you **compare**, **accept/reject**, and **download** updated code. The main UI is a **single HTML template** with vanilla JavaScript (no frontend build step).
 
-- Uploads a **single `.py` file** into server storage
-- Extracts functions via AST
-- Profiles memory usage (original + optimized) in a subprocess
-- Optimizes function code with an LLM (optional / configurable)
-- Stores before/after results in SQLite
-- Exposes JSON APIs used by the built-in UI (no frontend build step)
+## What you can do
 
-## What you can do in the UI
+- **Ingest** one file: `.py`, `.js`, `.ts`, `.jsx`, or `.tsx` (stored under `repo_store/` on disk; metadata in **SQLite**).
+- **Chat history** sidebar lists past uploads by **original filename** (each ingest is a stored session).
+- Browse **files** → **functions** → open **details** (original vs optimized code, KPIs, memory chart).
+- Run **profile → LLM optimize → re-profile** and compare peak memory, execution time, and improvement.
+- **Accept** or **reject** an optimization; on accept, download the updated file when the API provides a link.
 
-- Upload **one `.py` file**
-- Browse extracted functions
-- Run **profile → LLM optimize → re-profile**
-- Compare before/after (peak memory + execution time + chart)
-- Accept/reject an optimization and download the updated file
+## Architecture
+
+The diagram below is valid [Mermaid](https://mermaid.js.org/) syntax (renders on GitHub, GitLab, many IDEs, and documentation sites).
+
+```mermaid
+flowchart TB
+  subgraph Client["Client"]
+    B["Browser"]
+    UI["app.html + JS<br/>Chat history, ingest, details"]
+  end
+
+  subgraph Django["Django application"]
+    ROUTES["core/urls.py + optimizer/urls.py"]
+    VUI["views_ui.app → app.html"]
+    VAPI["views_api<br/>REST JSON"]
+    LANG["language_service<br/>Python vs Node"]
+    ASTPY["ast_service"]
+    ASTJS["js_ast_service"]
+    PROFPY["profiler_service<br/>subprocess + memory_profiler"]
+    PROFNODE["node_profiler_service"]
+    LLM["llm_service<br/>OpenAI-compatible API"]
+    VAPI --> LANG
+    LANG --> ASTPY
+    LANG --> ASTJS
+    VAPI --> PROFPY
+    VAPI --> PROFNODE
+    VAPI --> LLM
+    ROUTES --> VUI
+    ROUTES --> VAPI
+  end
+
+  subgraph Data["Persistence"]
+    SQLITE[("SQLite<br/>Repository, RepoFile,<br/>Function, ProfilingResult")]
+    DISK["repo_store/<br/>uploaded files on disk"]
+  end
+
+  subgraph External["External"]
+    OAI["LLM provider<br/>(optional)"]
+  end
+
+  B --> UI
+  UI -->|"fetch / POST"| VAPI
+  VAPI --> SQLITE
+  VAPI --> DISK
+  LLM --> OAI
+```
+
+**Request flow (high level):** the UI calls JSON endpoints under the same origin (`/repos`, `/files/…`, `/functions/…`, `/function/…`, `/optimize/…`, ingest, download, chart). Ingest writes the file to `repo_store`, creates `Repository` (display name = uploaded filename), `RepoFile`, and `Function` rows. Profiling uses a **Python subprocess** for `.py` (hard timeout) and Node-side tooling for JS/TS where applicable.
 
 ## Setup
 
@@ -27,52 +69,50 @@ python manage.py migrate
 python manage.py runserver
 ```
 
-Then open:
+Open the app: **http://127.0.0.1:8000/**
 
-- UI: `http://127.0.0.1:8000/`
+Copy `.env.example` to `.env` and adjust variables as needed.
 
 ## LLM configuration
 
 Set either OpenAI-style env vars or the generic `LLM_*` aliases:
 
 - `OPENAI_API_KEY` (or `LLM_API_KEY`)
-- `OPENAI_MODEL` (or `LLM_MODEL`) default: `gpt-4o-mini`
-- `OPENAI_BASE_URL` (or `LLM_BASE_URL`) optional for OpenAI-compatible providers
+- `OPENAI_MODEL` (or `LLM_MODEL`) , default: `gpt-4o-mini`
+- `OPENAI_BASE_URL` (or `LLM_BASE_URL`) , optional for OpenAI-compatible providers
 
-You can start from `.env.example` and copy it to `.env`.
+## API (main app)
 
-## API
+All of these are served from the same Django server (paths are relative to the site root).
 
-All endpoints are served from the same Django server.
+| Action | Method | Path |
+|--------|--------|------|
+| List sessions | `GET` | `/repos` |
+| Ingest file | `POST` | `/repos/ingest/file` (multipart field: `file`) |
+| List files in session | `GET` | `/files/<repo_id>` |
+| List functions in file | `GET` | `/functions/<file_id>` |
+| Function detail + profiles | `GET` | `/function/<fn_id>` |
+| Run optimizer | `POST` | `/optimize/<function_id>` |
+| Accept / reject | `POST` | `/function/<fn_id>/decision` body: `{"action": "accept" \| "reject"}` |
+| Memory chart PNG | `GET` | `/function/<fn_id>/memory-chart.png` |
+| Download file | `GET` | `/file/<file_id>/download` |
 
-### Ingest (single file)
+Additional routes exist in `optimizer/urls.py` (e.g. merged/optimized file helpers) for advanced use.
 
-- `POST /repos/ingest/file` (multipart form field: `file`)
+## Legacy / Phase 1
 
-### Browse
+- **`/phase1/`** , older exploratory UI and related **`/api/...`** routes in `core/views.py` (zip/GitHub-era surface area).
+- **GitHub ingestion** is removed; GitHub-style endpoints respond with **HTTP 410** where applicable.
 
-- `GET /repos`
-- `GET /files/<repo_id>`
-- `GET /functions/<file_id>`
-- `GET /function/<fn_id>`
+Prefer the root **`/`** UI and the **`/repos`…** API above for current work.
 
-### Optimize + decide
+## Safety / sandboxing
 
-- `POST /optimize/<function_id>`
-- `POST /function/<fn_id>/decision` body: `{ "action": "accept" | "reject" }`
+- Python profiling runs in a **separate process** with a **hard timeout** (see `profiler_service`).
+- The stack only auto-profiles callables that can be invoked **with no arguments** (best-effort).
+- This is **not** a hardened sandbox: executed code can still perform harmful actions. For untrusted code, use OS- or container-level isolation and strict filesystem/network policy.
 
-### Download / visualization
+## Tech stack
 
-- `GET /function/<fn_id>/memory-chart.png`
-- `GET /file/<file_id>/download`
-
-## Notes on safety / sandboxing
-
-- Profiling runs in a **separate Python subprocess** with a hard timeout.
-- The system only auto-profiles functions that can be called **with no arguments**.
-- This is **not** a hardened sandbox (Python code can still do dangerous things if executed). For higher security, run profiling in an OS/container sandbox with strict filesystem/network controls.
-
-## Deprecated / legacy endpoints
-
-This repo still contains a legacy Phase1 page at `GET /phase1/`, but **GitHub ingestion has been removed** and any GitHub-based endpoints return HTTP 410.
-
+- **Django** 5.2+, **SQLite**, **memory-profiler**, **matplotlib** (charts), **openai** client, optional **LangGraph** in the broader repo.
+- **No** npm/webpack build for the primary UI , static template + fetch.

@@ -112,7 +112,6 @@
     <header>
       <div>
         <h1>Memory Profiler Optimizer</h1>
-        <div class="sub">Ingest → select → profile/optimize → compare → decide</div>
       </div>
       <div class="sub" id="status">Ready</div>
     </header>
@@ -129,9 +128,9 @@
           </div>
 
           <div class="section-title" style="margin: 14px 0 8px 0">Files</div>
-          <div class="list" id="filesList"><div class="muted">Select a repository.</div></div>
+          <div class="list" id="filesList"><div class="muted">Select an entry from chat history.</div></div>
 
-          <div class="section-title" style="margin: 14px 0 8px 0">Repositories</div>
+          <div class="section-title" style="margin: 14px 0 8px 0">Chat History</div>
           <div class="list" id="reposList"><div class="muted">Loading…</div></div>
         </div>
       </section>
@@ -200,13 +199,13 @@
         const el = $("reposList");
         el.innerHTML = "";
         if (!state.repos.length) {
-          el.innerHTML = '<div class="muted">No repositories yet.</div>';
+          el.innerHTML = '<div class="muted">No chat history yet.</div>';
           return;
         }
         for (const r of state.repos) {
           const div = document.createElement("div");
           div.className = "item" + (state.selectedRepoId === r.id ? " active" : "");
-          div.textContent = `${r.id} ${r.name}`;
+          div.textContent = r.name;
           div.onclick = () => selectRepo(r.id);
           el.appendChild(div);
         }
@@ -216,7 +215,7 @@
         const el = $("filesList");
         el.innerHTML = "";
         if (!state.selectedRepoId) {
-          el.innerHTML = '<div class="muted">Select a repository.</div>';
+          el.innerHTML = '<div class="muted">Select an entry from chat history.</div>';
           return;
         }
         if (!state.files.length) {
@@ -318,7 +317,7 @@
       }
 
       async function refreshRepos() {
-        setStatus("Loading repositories…");
+        setStatus("Loading chat history…");
         state.repos = (await api("/repos"))?.repos || [];
         renderRepos();
         setStatus("Ready");

@@ -216,7 +216,7 @@ def ingest_single_file(request: HttpRequest) -> JsonResponse:
             for chunk in up.chunks():
                 f.write(chunk)
 
-        repo = Repository.objects.create(name=Path(repo_root).name, path=str(repo_root))
+        repo = Repository.objects.create(name=filename, path=str(repo_root))
         rel = Path(filename).as_posix()
         rf = RepoFile.objects.create(repo=repo, file_path=rel)
         lang = language_service.detect_language(abs_file)
